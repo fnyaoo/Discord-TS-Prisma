@@ -1,9 +1,10 @@
-process.stdout.write('\u001b[2J\u001b[0;0H');
-
 import Client from "./structures/Client";
-import { GatewayIntentBits, Partials } from "discord.js";
-import 'dotenv/config';
-import ready from "./utils/ready";
+import { GatewayIntentBits, Partials, REST, Routes } from "discord.js";
+import "dotenv/config";
+import { readdirSync } from "fs";
+import path from "path";
+import BaseCommand from "./structures/BaseCommand";
+import Config from "./structures/Config";
 
 const client = new Client({
 	intents: [
@@ -20,17 +21,34 @@ const client = new Client({
 });
 
 export default client;
-(async()=>{
-	client.logger.send(`[INDEX] Инициализация бота`);
-	await client.login(process.env.TOKEN)
-	await client.logger.init(client);
-	
-	(await import(`./handlers/events`)).default(client).catch(client.logger.error);
-	(await import(`./handlers/commands`)).default(client).catch(client.logger.error);
-	client.on('error', client.logger.error)
-	client.on('warn', client.logger.send)
-	
-	process.on('uncaughtException', client.logger.error);
-	process.on('unhandledRejection', client.logger.error);
-})()
-client.on('ready', ()=> ready(client))
+
+readdirSync(path.join(__dirname, "events")).forEach(async (file) => {
+	try {
+		const { default: event } = await import(`./events/${file}`);
+		if (event.once) {
+			client.once(event.name, (...args) => event.execute(client, ...args));
+		} else {
+			client.on(event.name, (...args) => event.execute(client, ...args));
+		}
+		client.store.events.push(file);
+	} catch (error) {
+		console.log(file);
+		console.log(error);
+	}
+});
+
+readdirSync(path.join(__dirname, "commands")).forEach(async (dir) => {
+	const files = readdirSync(path.join(__dirname, "commands", dir));
+	files.map(async (file) => {
+		try {
+			const command: BaseCommand = new ((await import(path.join(__dirname, "commands", dir, file)))?.default)();
+			command.componentListener(client);
+			if (command.type.some((e) => Object.values(Config.CommandType).includes(e))) client.store.commands.set(command.name, command);
+		} catch (error: any) {
+			console.log(dir);
+			client.logger.error(error);
+		}
+	});
+});
+
+client.login(process.env.TOKEN);
